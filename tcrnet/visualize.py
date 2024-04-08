@@ -3,7 +3,63 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import networkx as nx
+from .networks.graph import compute_node_positions
+from .networks.metrics import compute_network_metrics
 
+
+def generate_network_plot(graph: nx.classes.graph.Graph,
+                          network_metrics: dict,
+                          partition: dict,
+                          colors: dict,
+                          output_filepath: str=None,
+                          k: float=.15,
+                          seed: int=42,
+                          plot_title: str='',
+                          figsize: tuple=(12, 10),
+                          dpi: int=500,
+                          nx_kwargs: dict=None):
+    # set the desired figure resolution
+    plt.rcParams['figure.dpi'] = dpi
+    if not nx_kwargs:
+        nx_kwargs = {"edgecolors": "tab:gray"}
+    # Set the desired figure size (adjust width and height as needed)
+    fig = plt.figure(figsize=figsize)
+    node_positions = compute_node_positions(graph, k=k, seed=seed)
+    # Create lists of nodes in the graph
+    nodes = [node for node in graph.nodes]
+    # Draw the network graphs with circles for the 1st state and triangles for the 2nd state
+    nx.draw(graph,
+            nodelist=nodes,  # Only nodes in the 1st state
+            pos=node_positions,
+            node_color=[colors.get(partition.get(i), 'grey') for i in nodes],
+            node_shape='o',  # Circle shape for 1st state
+            node_size=50,
+            with_labels=False,
+            **nx_kwargs)
+    # Annotate each cluster with its cluster number
+    for cluster, color in list(colors.items()):
+        cluster_nodes = [node for node, part in partition.items() if part == cluster]
+        x, y = zip(*[node_positions[node] for node in cluster_nodes])
+        x_center, y_center = sum(x) / len(cluster_nodes), sum(y) / len(cluster_nodes)
+        plt.text(x_center, y_center, f'{cluster}', fontsize=11, 
+                 color='black', ha='center', va='center', fontweight='bold')
+    # legend customization
+    ax = plt.gca()
+    # generate title for plot
+    latex_symbol1 = r'$D_{total}$'
+    latex_symbol2 = r'$\overline{S}(C_{x})_{x \in [0:12]}$'
+    latex_symbol3 = r'$\overline{S}(C_{x}, C_{y})_{x,y \in [0:12], x \neq y}$'
+    latex_symbol4 = r'$\beta$'
+    plt.title(f"""{plot_title}\n
+              {latex_symbol1} = {network_metrics['total_density']:.6f}\n
+              {latex_symbol2} = {np.mean(network_metrics['intracluster_density']):.4G}\n
+              {latex_symbol3} = {np.mean(network_metrics['intercluster_density']):.4G}""")
+    if output_filepath:
+        plt.savefig(output_filepath, 
+                    bbox_inches='tight',
+                    dpi=dpi)
+    return plt.show()
 
 
 def top_n_clonotypes(tcr_df: pd.DataFrame, 
@@ -38,7 +94,9 @@ def top_n_clonotypes(tcr_df: pd.DataFrame,
     plt.title(f"{n_total_symbol} = {tcr_df['num_records'].sum()}\n{n_clonos_symbol} = {tcr_df['clonotype_id'].nunique()}")
     plt.tight_layout()  # Adjust layout for better presentation
     if output_filepath:
-        plt.savefig(output_filepath, dpi=dpi)
+        plt.savefig(output_filepath, 
+                    bbox_inches='tight', 
+                    dpi=dpi)
     return plt.show()
 
 
@@ -91,18 +149,23 @@ def sequence_length_distributions(tcr_df: pd.DataFrame,
     fig.supylabel('Cell (Absolute) Count', fontsize=18)
     plt.tight_layout()  # Adjust layout for better presentation
     if output_filepath:
-        plt.savefig(output_filepath, dpi=dpi)
+        plt.savefig(output_filepath, 
+                    dpi=dpi, 
+                    bbox_inches='tight')
     return plt.show()
 
 
 def chain_pairing_configurations(tcr_df: pd.DataFrame,
+                                 clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                                  figsize: tuple=(8,6),
                                  output_filepath: str=None,
                                  dpi: int=350):
     """This function generates a bar plot showing the different alpha-beta pairing configurations 
     that are present in the TCR data prior to processing (i.e. QC)"""
     # aggregate data by cell ID and chain type (alpha or beta), count number of chains observed 
-    tcr_df['chain_identifier'] = tcr_df['cdr1'] + '_' + tcr_df['cdr2'] + '_' + tcr_df['cdr3']
+    tcr_df['chain_identifier'] = tcr_df.apply(lambda row: '_'.join(row[col] for col in clonotype_definition), 
+                                              axis=1)
+    # tcr_df['chain_identifier'] = tcr_df['cdr1'] + '_' + tcr_df['cdr2'] + '_' + tcr_df['cdr3']
     chain_result1 = (tcr_df
                      .groupby(['barcode', 'chain'])
                      .agg(num_records=('chain_identifier', 'nunique'))
@@ -166,7 +229,9 @@ def chain_pairing_configurations(tcr_df: pd.DataFrame,
     plt.tight_layout()
     # Save the plot
     if output_filepath:
-        plt.savefig(output_filepath, dpi=dpi)
+        plt.savefig(output_filepath, 
+                    dpi=dpi, 
+                    bbox_inches='tight')
     return plt.show()
 
 
@@ -208,5 +273,7 @@ def clonotype_abundances(tcr_df: pd.DataFrame,
     plt.grid(False)
     # Save the plot
     if output_filepath:
-        plt.savefig(output_filepath, dpi=dpi)
+        plt.savefig(output_filepath, 
+                    dpi=dpi, 
+                    bbox_inches='tight')
     return plt.show()
