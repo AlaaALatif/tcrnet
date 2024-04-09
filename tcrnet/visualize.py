@@ -80,7 +80,7 @@ def top_n_clonotypes(tcr_df: pd.DataFrame,
         plt.bar(' ', row['pct_records']*100, bottom=bottom, 
                 color=colors[i], label=row['clonotype_id'])
         plt.text(' ', bottom + row['pct_records']*100/2, 
-                 f"{row['clonotype_id']} ({row['pct_records']*100:.3f}%)", 
+                 f"{row['clonotype_id']} ({row['pct_records']*100:.3f}%, {row['num_records']})", 
                  ha='center', va='center')
         bottom += row['pct_records']*100  # Move the starting point of the next segment up
     # Remove top and right borders
