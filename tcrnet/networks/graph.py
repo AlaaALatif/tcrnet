@@ -6,74 +6,71 @@ from .similarity import compute_nearest_neighbors
 
 def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                              distance_matrix: np.array,
+                             clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                              analysis_mode: str='private',
                              edge_threshold: int=150,
                              count_threshold: int=2):
     network = list()
     # create set of nearest neighbors for each clonotype
     nearest_neighbors = compute_nearest_neighbors(distance_matrix, edge_threshold)
+    # collect CDR-related field names
+    alpha_cdr_fields = {
+        f'alpha_{sequence_name}': f'{sequence_name}_a_aa' for sequence_name in clonotype_definition
+        }
+    ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
+    beta_cdr_fields = {
+        f'beta_{sequence_name}': f'{sequence_name}_b_aa' for sequence_name in clonotype_definition
+        }
+    all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
     # populate our network with nodes as clonotypes, and edges as similarity-distance between them
     for n1_idx, n1_neighbors in enumerate(nearest_neighbors):
         for n2_idx in n1_neighbors:
+            record_data = []
             if n1_idx!=n2_idx:
-                network.append((
+                record_data.extend([
                     n1_idx,
                     n2_idx,
                     distance_matrix[n1_idx, n2_idx],
-                    ntcr_df['cdr1_b_aa'].iloc[n1_idx],
-                    ntcr_df['cdr1_b_aa'].iloc[n2_idx],
-                    ntcr_df['cdr2_b_aa'].iloc[n1_idx],
-                    ntcr_df['cdr2_b_aa'].iloc[n2_idx],
-                    ntcr_df['cdr3_b_aa'].iloc[n1_idx],
-                    ntcr_df['cdr3_b_aa'].iloc[n2_idx],
-                    ntcr_df['cdr1_a_aa'].iloc[n1_idx],
-                    ntcr_df['cdr1_a_aa'].iloc[n2_idx],
-                    ntcr_df['cdr2_a_aa'].iloc[n1_idx],
-                    ntcr_df['cdr2_a_aa'].iloc[n2_idx],
-                    ntcr_df['cdr3_a_aa'].iloc[n1_idx],
-                    ntcr_df['cdr3_a_aa'].iloc[n2_idx],
+                ])
+                for cdr_field_name in all_field_names:
+                    # For each field name, select the value at n1_idx and n2_idx
+                    record_data.append(ntcr_df[cdr_field_name].iloc[n1_idx])
+                    record_data.append(ntcr_df[cdr_field_name].iloc[n2_idx])
+                record_data.extend([
                     len(n1_neighbors),
                     False,
                     ntcr_df['clone_id'].iloc[n1_idx],
                     ntcr_df['clone_id'].iloc[n2_idx],
                     ntcr_df['sample_id'].iloc[n1_idx],
                     ntcr_df['sample_id'].iloc[n2_idx]
-                ))
+                ])
             elif ntcr_df['count'].iloc[n1_idx] >= count_threshold and len(n1_neighbors)==1:
-                network.append((
+                record_data.extend([
                     n1_idx,
                     n2_idx,
-                    distance_matrix[n1_idx, n2_idx],
-                    ntcr_df['cdr1_b_aa'].iloc[n1_idx],
-                    ntcr_df['cdr1_b_aa'].iloc[n2_idx],
-                    ntcr_df['cdr2_b_aa'].iloc[n1_idx],
-                    ntcr_df['cdr2_b_aa'].iloc[n2_idx],
-                    ntcr_df['cdr3_b_aa'].iloc[n1_idx],
-                    ntcr_df['cdr3_b_aa'].iloc[n2_idx],
-                    ntcr_df['cdr1_a_aa'].iloc[n1_idx],
-                    ntcr_df['cdr1_a_aa'].iloc[n2_idx],
-                    ntcr_df['cdr2_a_aa'].iloc[n1_idx],
-                    ntcr_df['cdr2_a_aa'].iloc[n2_idx],
-                    ntcr_df['cdr3_a_aa'].iloc[n1_idx],
-                    ntcr_df['cdr3_a_aa'].iloc[n2_idx],
+                    distance_matrix[n1_idx, n2_idx]
+                ])
+                for cdr_field_name in all_field_names:
+                    # For each field name, select the value at n1_idx and n2_idx
+                    record_data.append(ntcr_df[cdr_field_name].iloc[n1_idx])
+                    record_data.append(ntcr_df[cdr_field_name].iloc[n2_idx])
+                record_data.extend([
                     len(n1_neighbors),
                     True,
                     ntcr_df['clone_id'].iloc[n1_idx],
                     ntcr_df['clone_id'].iloc[n2_idx],
                     ntcr_df['sample_id'].iloc[n1_idx],
                     ntcr_df['sample_id'].iloc[n2_idx]
-                ))
+                ])
+            network.append(record_data)
     # create a dataframe representation of our network graph
-    network_columns = ['node_1', 'node_2', 'distance', 
-                    'cdr1_b_aa_1', 'cdr1_b_aa_2',
-                    'cdr2_b_aa_1', 'cdr2_b_aa_2',
-                    'cdr3_b_aa_1', 'cdr3_b_aa_2',
-                    'cdr1_a_aa_1', 'cdr1_a_aa_2',
-                    'cdr2_a_aa_1', 'cdr2_a_aa_2',
-                    'cdr3_a_aa_1', 'cdr3_a_aa_2',
-                    'k_neighbors', 'is_island',
-                    'clone_id_1', 'clone_id_2',
-                    'sample_id_1', 'sample_id_2']
+    network_columns = ['node_1', 'node_2', 'distance']
+    for cdr_field_name in all_field_names:
+        network_columns.append(f'{cdr_field_name}_1') 
+        network_columns.append(f'{cdr_field_name}_2')
+    network_columns += ['k_neighbors', 'is_island',
+                        'clone_id_1', 'clone_id_2',
+                        'sample_id_1', 'sample_id_2']
     network_df = pd.DataFrame(network, columns = network_columns)
     # calculate the weight for each edge (connection between two TCR clonotypes)
     network_df['weight'] = (edge_threshold - network_df['distance']) / edge_threshold
