@@ -6,7 +6,8 @@ from .similarity import compute_nearest_neighbors
 
 def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                              distance_matrix: np.array,
-                             clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
+                             clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
+                             chain: str='alpha-beta',
                              analysis_mode: str='private',
                              edge_threshold: int=150,
                              count_threshold: int=2):
@@ -17,11 +18,20 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
     alpha_cdr_fields = {
         f'alpha_{sequence_name}': f'{sequence_name}_a_aa' for sequence_name in clonotype_definition
         }
-    ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
+    # ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
     beta_cdr_fields = {
         f'beta_{sequence_name}': f'{sequence_name}_b_aa' for sequence_name in clonotype_definition
         }
-    all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
+    if chain == 'alpha-beta':
+        all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
+    elif chain == 'beta':
+        all_field_names = list(beta_cdr_fields.values())
+        ntcr_df = ntcr_df.rename(columns=beta_cdr_fields).copy()
+    elif chain == 'alpha':
+        all_field_names = list(alpha_cdr_fields.values())
+        ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
+    else: 
+        raise ValueError(f"{chain} is not a valid mode for processing alpha-beta TCRs. Choose from {valid_chain_opts}")
     # populate our network with nodes as clonotypes, and edges as similarity-distance between them
     for n1_idx, n1_neighbors in enumerate(nearest_neighbors):
         for n2_idx in n1_neighbors:
