@@ -8,6 +8,7 @@ from .networks.graph import compute_node_positions
 from .networks.metrics import compute_network_metrics
 
 
+
 def generate_network_plot(graph: nx.classes.graph.Graph,
                           network_metrics: dict,
                           partition: dict,
@@ -48,8 +49,8 @@ def generate_network_plot(graph: nx.classes.graph.Graph,
     ax = plt.gca()
     # generate title for plot
     latex_symbol1 = r'$D_{total}$'
-    latex_symbol2 = r'$\overline{S}(C_{x})_{x \in [0:12]}$'
-    latex_symbol3 = r'$\overline{S}(C_{x}, C_{y})_{x,y \in [0:12], x \neq y}$'
+    latex_symbol2 = r'$\overline{S}(C_{x})_{x \in [0:k]}$'
+    latex_symbol3 = r'$\overline{S}(C_{x}, C_{y})_{x,y \in [0:k], x \neq y}$'
     latex_symbol4 = r'$\beta$'
     plt.title(f"""{plot_title}\n
               {latex_symbol1} = {network_metrics['total_density']:.6f}\n
