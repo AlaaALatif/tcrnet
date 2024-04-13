@@ -10,13 +10,26 @@ def standardize_tcr_data(tcr_filepath: str,
                          save_output: bool=False):
     """This function ingests standardizes VDJ data to allow their use with `tcrnet`"""
     valid_technology_platforms = ['10X', 'Omniscope', 'ViraFEST']
-    if technology_platform == '10X':
+    if technology_platform.lower() == '10x':
         tcr_df = pd.read_csv(tcr_filepath, compression=compression)
         tcr_df = tcr_df.loc[(tcr_df['productive']==True)
                            &(tcr_df['is_cell']==True)].copy()
-    elif technology_platform == 'Omniscope':
-        raise NotImplementedError
-    elif technology_platform == 'ViraFEST':
+        tcr_df.rename(columns={
+            "cdr1": "cdr1_aa",
+            "cdr2": "cdr2_aa",
+            "cdr3": "cdr3_aa",
+            "umis": "umi_count"
+        }, inplace=True)
+    elif technology_platform.lower() == 'omniscope':
+        tcr_df = pd.read_csv(tcr_filepath, compression=compression)
+        tcr_df = tcr_df.loc[(tcr_df['productive']=='T')].copy()
+        tcr_df.rename(columns={
+            "cdr1": "cdr1_nt",
+            "cdr2": "cdr2_nt",
+            "cdr3": "cdr3_nt",
+            "locus": "chain",
+        }, inplace=True)
+    elif technology_platform.lower() == 'virafest':
         raise NotImplementedError
     else:
         raise ValueError(f"{technology_platform} data not expected by the tool. Valid options are{valid_technology_platforms}")
@@ -27,7 +40,7 @@ def standardize_tcr_data(tcr_filepath: str,
 
 def preprocess_tcr_data(tcr_df: pd.DataFrame,
                         sample_id: str,
-                        clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
+                        clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
                         chain: str='alpha-beta'):
     """This function ingests VDJ data from 10X, Omniscope, or ViraFEST 
     and performs preprocessing steps, including chain-pairing if applicable."""
@@ -53,20 +66,89 @@ def preprocess_tcr_data(tcr_df: pd.DataFrame,
         tcr_df = _apply_alpha_beta_qc(tcr_df)
         print(f"# records after QC2 - Missing Chain Pairings: {tcr_df.shape}")
     elif chain=='beta':
+        tcr_df.rename(columns={"chain_identifier": "chain_identifier_beta"}, inplace=True)
         tcr_df['chain_identifier_alpha'] = ''
         # TODO: implement apply_alpha_qc
+        tcr_df = _apply_beta_qc(tcr_df)
+        print(f"# records after QC2 - Missing Beta-Chain Sequence Information: {tcr_df.shape}")
     elif chain=='alpha':
+        tcr_df.rename(columns={"chain_identifier": "chain_identifier_alpha"}, inplace=True)
         tcr_df['chain_identifier_beta'] = ''
         # TODO: implement apply_beta_qc
+        tcr_df = _apply_alpha_qc(tcr_df)
+        print(f"# records after QC2 - Missing Alpha-Chain Sequence Information: {tcr_df.shape}")
     else: 
         raise ValueError(f"{chain} is not a valid mode for processing alpha-beta TCRs. Choose from {valid_chain_opts}")
     tcr_df['sample_id'] = sample_id
     return tcr_df
 
 
+def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
+                                 clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
+                                 chain: str='alpha-beta'):
+    """This function computes clonotype abundances from processed VDJ data."""
+    # Valid options for immune repertoire receptor chains
+    valid_chain_opts = ['alpha', 'beta', 'alpha-beta']
+    # compute number of cells per clonotype
+    tcr_counts = (processed_tcr_df
+                  .groupby(['sample_id', 'clonotype_id'])
+                  .agg(num_records=('barcode', 'nunique'))
+                  .reset_index())
+    tcr_total_counts = (tcr_counts
+                  .groupby('sample_id')
+                  .agg(total_records=('num_records', 'sum'))
+                  .reset_index())
+    tcr_counts = pd.merge(tcr_counts, tcr_total_counts, on='sample_id')
+    # compute relative frequency of each clonotype
+    tcr_counts['pct_records'] = tcr_counts['num_records'] / tcr_counts['total_records']
+    # extract CDR sequences
+    cdr_sequence_fields = []
+    if chain == 'alpha-beta' or chain == 'alpha':
+        for i, sequence_name in enumerate(clonotype_definition):
+            tcr_counts[f'alpha_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('-')[0].split('_')[i])
+            tcr_counts[f'beta_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('-')[1].split('_')[i])
+            cdr_sequence_fields.extend([f'alpha_{sequence_name}', 
+                                        f'beta_{sequence_name}'])
+    elif chain == 'beta':
+        for i, sequence_name in enumerate(clonotype_definition):
+            tcr_counts[f'beta_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('_')[i])
+            cdr_sequence_fields.extend([f'beta_{sequence_name}'])
+    elif chain == 'alpha':
+        for i, sequence_name in enumerate(clonotype_definition):
+            tcr_counts[f'alpha_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('_')[i])
+            cdr_sequence_fields.extend([f'alpha_{sequence_name}'])
+    else:
+        raise ValueError(f"{chain} is not a valid chain type. Choose from {valid_chain_opts}")
+    # compute sequence lengths
+    for cdr_seq in cdr_sequence_fields:
+        tcr_counts[f'{cdr_seq}_length'] = tcr_counts[cdr_seq].str.len()
+    return tcr_counts.sort_values(by='pct_records', ascending=False)
+
+
+def _apply_beta_qc(tcr_df: pd.DataFrame):
+    """This internal function ingests VDJ data during processing and applies quality control (QC) steps.
+    This function gets automatically applied when using the `preprocess_tcr_data()` function 
+    with parameter `chain='beta'`."""
+    chain_qc_df = tcr_df.loc[(tcr_df['chain_identifier_alpha']=='')
+                            &(tcr_df['chain_identifier_beta']!='')].copy()
+    chain_qc_df['clonotype_id'] = tcr_df['chain_identifier_beta'].copy()
+    return chain_qc_df.reset_index().rename(columns={'index': 'barcode'})
+
+
+def _apply_alpha_qc(tcr_df: pd.DataFrame):
+    """This internal function ingests VDJ data during processing and applies quality control (QC) steps.
+    This function gets automatically applied when using the `preprocess_tcr_data()` function 
+    with parameter `chain='alpha'`."""
+    chain_qc_df = tcr_df.loc[(tcr_df['chain_identifier_alpha']!='')
+                            &(tcr_df['chain_identifier_beta']=='')].copy()
+    chain_qc_df['clonotype_id'] = tcr_df['chain_identifier_alpha'].copy()
+    return chain_qc_df
+
+
 def _apply_alpha_beta_qc(paired_tcr_df: pd.DataFrame):
     """This internal function ingests VDJ data during processing and applies quality control (QC) steps.
-    This function gets automatically applied when using the `preprocess_tcr_data()` function."""
+    This function gets automatically applied when using the `preprocess_tcr_data()` function 
+    with parameter `chain='alpha-beta'`."""
     # generate dictionaries of alpha-beta pairing information
     chain_qc_df = paired_tcr_df.loc[(paired_tcr_df['chain_identifier_alpha']!='')
                                    &(paired_tcr_df['chain_identifier_beta']!='')].copy()
@@ -107,35 +189,3 @@ def _apply_alpha_beta_qc(paired_tcr_df: pd.DataFrame):
     valid_clonotypes = tcr_paired_qc_df.drop_duplicates(subset=['barcode'], keep='first')['clonotype_id'].unique()
     tcr_paired_qc_df = tcr_paired_qc_df.loc[tcr_paired_qc_df['clonotype_id'].isin(valid_clonotypes)].copy()
     return tcr_paired_qc_df
-
-
-def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
-                                 clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
-                                 chain: str='alpha-beta'):
-    """This function computes clonotype abundances from processed VDJ data."""
-    # compute number of cells per clonotype
-    tcr_counts = (processed_tcr_df
-                  .groupby(['sample_id', 'clonotype_id'])
-                  .agg(num_records=('barcode', 'nunique'))
-                  .reset_index())
-    tcr_total_counts = (tcr_counts
-                  .groupby('sample_id')
-                  .agg(total_records=('num_records', 'sum'))
-                  .reset_index())
-    tcr_counts = pd.merge(tcr_counts, tcr_total_counts, on='sample_id')
-    # compute relative frequency of each clonotype
-    tcr_counts['pct_records'] = tcr_counts['num_records'] / tcr_counts['total_records']
-    # extract CDR sequences
-    cdr_sequence_fields = []
-    if chain == 'alpha-beta' or chain == 'alpha':
-        for i, sequence_name in enumerate(clonotype_definition):
-            tcr_counts[f'alpha_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('-')[0].split('_')[i])
-            cdr_sequence_fields.extend([f'alpha_{sequence_name}'])
-    if chain == 'alpha-beta' or chain == 'beta':
-        for i, sequence_name in enumerate(clonotype_definition):
-            tcr_counts[f'beta_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('-')[1].split('_')[i])
-            cdr_sequence_fields.extend([f'beta_{sequence_name}'])
-    # compute sequence lengths
-    for cdr_seq in cdr_sequence_fields:
-        tcr_counts[f'{cdr_seq}_length'] = tcr_counts[cdr_seq].str.len()
-    return tcr_counts.sort_values(by='pct_records', ascending=False)
