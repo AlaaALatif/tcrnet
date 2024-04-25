@@ -4,9 +4,10 @@ import networkx as nx
 from .similarity import compute_nearest_neighbors
 
 
+
 def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                              distance_matrix: np.array,
-                             clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
+                             clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                              chain: str='alpha-beta',
                              analysis_mode: str='private',
                              edge_threshold: int=150,
@@ -35,8 +36,8 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
     # populate our network with nodes as clonotypes, and edges as similarity-distance between them
     for n1_idx, n1_neighbors in enumerate(nearest_neighbors):
         for n2_idx in n1_neighbors:
-            record_data = []
             if n1_idx!=n2_idx:
+                record_data = []
                 record_data.extend([
                     n1_idx,
                     n2_idx,
@@ -52,9 +53,13 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                     ntcr_df['clone_id'].iloc[n1_idx],
                     ntcr_df['clone_id'].iloc[n2_idx],
                     ntcr_df['sample_id'].iloc[n1_idx],
-                    ntcr_df['sample_id'].iloc[n2_idx]
+                    ntcr_df['sample_id'].iloc[n2_idx],
+                    ntcr_df['count'].iloc[n1_idx],
+                    ntcr_df['count'].iloc[n2_idx]
                 ])
+                network.append(record_data)
             elif ntcr_df['count'].iloc[n1_idx] >= count_threshold and len(n1_neighbors)==1:
+                record_data = []
                 record_data.extend([
                     n1_idx,
                     n2_idx,
@@ -70,9 +75,11 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                     ntcr_df['clone_id'].iloc[n1_idx],
                     ntcr_df['clone_id'].iloc[n2_idx],
                     ntcr_df['sample_id'].iloc[n1_idx],
-                    ntcr_df['sample_id'].iloc[n2_idx]
+                    ntcr_df['sample_id'].iloc[n2_idx],
+                    ntcr_df['count'].iloc[n1_idx],
+                    ntcr_df['count'].iloc[n2_idx]
                 ])
-            network.append(record_data)
+                network.append(record_data)
     # create a dataframe representation of our network graph
     network_columns = ['node_1', 'node_2', 'distance']
     for cdr_field_name in all_field_names:
@@ -80,7 +87,8 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
         network_columns.append(f'{cdr_field_name}_2')
     network_columns += ['k_neighbors', 'is_island',
                         'clone_id_1', 'clone_id_2',
-                        'sample_id_1', 'sample_id_2']
+                        'sample_id_1', 'sample_id_2',
+                        'count_1', 'count_2']
     network_df = pd.DataFrame(network, columns = network_columns)
     # calculate the weight for each edge (connection between two TCR clonotypes)
     network_df['weight'] = (edge_threshold - network_df['distance']) / edge_threshold
@@ -101,17 +109,21 @@ def update_df_with_cluster_information(net_df: pd.DataFrame, partition: dict):
     net_df['cluster_2'] = net_df['node_2'].apply(lambda x: partition.get(x, None))
     # sizes of each cluster in the left-hand side
     cluster1_sizes = (net_df
+                    # .loc[net_df['cluster_1']<=top_k_clusters]
                     .groupby('cluster_1')
                     .agg(cluster1_size=('node_1', 'nunique'))
                     .reset_index())
     # sizes of each cluster in the right-hand side
     cluster2_sizes = (net_df
                     .groupby('cluster_2')
+                    # .loc[net_df['cluster_2']<=top_k_clusters]
                     .agg(cluster2_size=('node_2', 'nunique'))
                     .reset_index())
     # adding cluster size information to our network dataframe
-    net_df = pd.merge(net_df, cluster1_sizes, on='cluster_1')
-    net_df = pd.merge(net_df, cluster2_sizes, on='cluster_2')
+    net_df = pd.merge(net_df, cluster1_sizes, on='cluster_1', how='left')
+    net_df = pd.merge(net_df, cluster2_sizes, on='cluster_2', how='left')
+    net_df['cluster1_size'] = net_df['cluster1_size'].fillna(0)
+    net_df['cluster2_size'] = net_df['cluster2_size'].fillna(0)
     net_df[cols_of_interest].head()
     return net_df
 
@@ -122,7 +134,9 @@ def create_undirected_graph(net_df: pd.DataFrame):
         'source': net_df.loc[net_df['is_island']==False, 'node_1'],
         'target': net_df.loc[net_df['is_island']==False, 'node_2'],
         'weight': net_df.loc[net_df['is_island']==False, 'weight'],
-    }))
+        'relation': net_df.loc[net_df['is_island']==False, 'relation']
+        }),
+        edge_attr=['weight', 'relation'])
     # add island nodes to the graph for visualization
     for i, node_island in net_df.loc[net_df['is_island']==True].iterrows():
         graph.add_node(node_island['node_1'])

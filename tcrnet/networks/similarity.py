@@ -4,11 +4,12 @@ import pandas as pd
 import tcrdist
 import pwseqdist as pw
 from tcrdist.public import _neighbors_fixed_radius
-
+from tcrdist.repertoire import TCRrep
+from tcrdist.html_colors import get_html_colors
 
 
 def compute_tcrdist(qtcr_df: pd.DataFrame,
-                    clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
+                    clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                     chain: str='alpha-beta',
                     num_cpus: int=5):
     # Valid options for immune repertoire receptor chains
@@ -26,6 +27,8 @@ def compute_tcrdist(qtcr_df: pd.DataFrame,
         }
     if chain == 'alpha-beta':
         all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
+        ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
+        ntcr_df = ntcr_df.rename(columns=beta_cdr_fields).copy()
     elif chain == 'beta':
         all_field_names = list(beta_cdr_fields.values())
         ntcr_df = ntcr_df.rename(columns=beta_cdr_fields).copy()
