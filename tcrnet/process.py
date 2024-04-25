@@ -15,9 +15,9 @@ def standardize_tcr_data(tcr_filepath: str,
         tcr_df = tcr_df.loc[(tcr_df['productive']==True)
                            &(tcr_df['is_cell']==True)].copy()
         tcr_df.rename(columns={
-            "cdr1": "cdr1_aa",
-            "cdr2": "cdr2_aa",
-            "cdr3": "cdr3_aa",
+            # "cdr1": "cdr1_aa",
+            # "cdr2": "cdr2_aa",
+            # "cdr3": "cdr3_aa",
             "umis": "umi_count"
         }, inplace=True)
     elif technology_platform.lower() == 'omniscope':
@@ -40,22 +40,25 @@ def standardize_tcr_data(tcr_filepath: str,
 
 def preprocess_tcr_data(tcr_df: pd.DataFrame,
                         sample_id: str,
-                        clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
+                        clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                         chain: str='alpha-beta'):
     """This function ingests VDJ data from 10X, Omniscope, or ViraFEST 
     and performs preprocessing steps, including chain-pairing if applicable."""
     # Valid options for immune repertoire receptor chains
     valid_chain_opts = ['alpha', 'beta', 'alpha-beta']
     print(f"# records before QC: {tcr_df.shape}")
-    # Filter out records that are: non-productive, missing V/J calls
+    # Filter out records that are missing sequence information
     for sequence_name in clonotype_definition:
         tcr_df = tcr_df.loc[~(tcr_df[sequence_name].isna())].copy()
     print(f"# records after QC 1 - Missing CDR sequences: {tcr_df.shape}")
     tcr_df['chain_identifier'] = tcr_df.apply(lambda row: '_'.join(row[col] for col in clonotype_definition), 
                                               axis=1)
     if chain=='alpha-beta':
+        # separate out beta chains
         beta_tcr_df = tcr_df.loc[tcr_df['chain']=='TRB'].copy()
+        # separate out alpha chains
         alpha_tcr_df = tcr_df.loc[tcr_df['chain']=='TRA'].copy()
+        # perform outer merge between alpha and beta chain data
         tcr_df = pd.merge(beta_tcr_df, alpha_tcr_df, 
                           on='barcode', 
                           suffixes=('_beta', '_alpha'),
@@ -84,13 +87,20 @@ def preprocess_tcr_data(tcr_df: pd.DataFrame,
 
 
 def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
-                                 clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
+                                 clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
+                                 abundance_column_name: str=None,
                                  chain: str='alpha-beta'):
     """This function computes clonotype abundances from processed VDJ data."""
     # Valid options for immune repertoire receptor chains
     valid_chain_opts = ['alpha', 'beta', 'alpha-beta']
     # compute number of cells per clonotype
-    tcr_counts = (processed_tcr_df
+    if abundance_column_name:
+        tcr_counts = (processed_tcr_df
+                  .groupby(['sample_id', 'clonotype_id'])
+                  .agg(num_records=(abundance_column_name, 'sum'))
+                  .reset_index())
+    else:
+        tcr_counts = (processed_tcr_df
                   .groupby(['sample_id', 'clonotype_id'])
                   .agg(num_records=('barcode', 'nunique'))
                   .reset_index())
@@ -154,8 +164,8 @@ def _apply_alpha_beta_qc(paired_tcr_df: pd.DataFrame):
                                    &(paired_tcr_df['chain_identifier_beta']!='')].copy()
     alpha_beta_seq_dict = dict(zip(chain_qc_df['chain_identifier_alpha'], chain_qc_df['chain_identifier_beta']))
     beta_alpha_seq_dict = dict(zip(chain_qc_df['chain_identifier_beta'], chain_qc_df['chain_identifier_alpha']))
-    alpha_beta_umis_dict = dict(zip(chain_qc_df['chain_identifier_alpha'], chain_qc_df['umis_beta']))
-    beta_alpha_umis_dict = dict(zip(chain_qc_df['chain_identifier_beta'], chain_qc_df['umis_alpha']))
+    alpha_beta_umis_dict = dict(zip(chain_qc_df['chain_identifier_alpha'], chain_qc_df['umi_count_beta']))
+    beta_alpha_umis_dict = dict(zip(chain_qc_df['chain_identifier_beta'], chain_qc_df['umi_count_alpha']))
     alpha_beta_reads_dict = dict(zip(chain_qc_df['chain_identifier_alpha'], chain_qc_df['reads_beta']))
     beta_alpha_reads_dict = dict(zip(chain_qc_df['chain_identifier_beta'], chain_qc_df['reads_alpha']))
     # separate out barcodes (cell IDs) with orphan alpha/beta chains
@@ -163,13 +173,13 @@ def _apply_alpha_beta_qc(paired_tcr_df: pd.DataFrame):
     orphan_beta_df = paired_tcr_df.loc[(paired_tcr_df['chain_identifier_beta']=='')].copy()
     # impute missing alpha pairings by using pairings from other barcodes in the dataset 
     orphan_alpha_df['chain_identifier_alpha'] = orphan_alpha_df['chain_identifier_beta'].apply(lambda x: beta_alpha_seq_dict.get(x, ''))
-    orphan_alpha_df['umis_alpha'] = orphan_alpha_df['chain_identifier_beta'].apply(lambda x: beta_alpha_umis_dict.get(x, 0))
+    orphan_alpha_df['umi_count_alpha'] = orphan_alpha_df['chain_identifier_beta'].apply(lambda x: beta_alpha_umis_dict.get(x, 0))
     orphan_alpha_df['reads_alpha'] = orphan_alpha_df['chain_identifier_beta'].apply(lambda x: beta_alpha_reads_dict.get(x, 0))
     # remove any remaining orphan alpha chains
     orphan_alpha_df = orphan_alpha_df.loc[orphan_alpha_df['chain_identifier_alpha']!=''].fillna('')
     # impute missing beta pairings by using pairings from other barcodes in the dataset
     orphan_beta_df['chain_identifier_beta'] = orphan_beta_df['chain_identifier_alpha'].apply(lambda x: alpha_beta_seq_dict.get(x, ''))
-    orphan_beta_df['umis_beta'] = orphan_beta_df['chain_identifier_alpha'].apply(lambda x: alpha_beta_umis_dict.get(x, 0))
+    orphan_beta_df['umi_count_beta'] = orphan_beta_df['chain_identifier_alpha'].apply(lambda x: alpha_beta_umis_dict.get(x, 0))
     orphan_beta_df['reads_beta'] = orphan_beta_df['chain_identifier_alpha'].apply(lambda x: alpha_beta_reads_dict.get(x, 0))
     # remove any remaining orphan beta chains
     orphan_beta_df = orphan_beta_df.loc[orphan_beta_df['chain_identifier_beta']!=''].fillna('')
@@ -180,8 +190,8 @@ def _apply_alpha_beta_qc(paired_tcr_df: pd.DataFrame):
     # create identifier for beta chains
     tcr_paired_qc_df['clonotype_id'] = tcr_paired_qc_df['chain_identifier_alpha'] + '-' + tcr_paired_qc_df['chain_identifier_beta']
     # sort combined data in terms of cell -> UMIs (alpha+beta) -> reads (alpha+beta)
-    tcr_paired_qc_df.sort_values(by=['barcode', 'umis_alpha', 
-                                     'umis_beta', 'reads_alpha', 'reads_beta'], 
+    tcr_paired_qc_df.sort_values(by=['barcode', 'umi_count_alpha', 
+                                     'umi_count_beta', 'reads_alpha', 'reads_beta'], 
                                  ascending=[True, False, 
                                            False, False, False], 
                                  inplace=True)

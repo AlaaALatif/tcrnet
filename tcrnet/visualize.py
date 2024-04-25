@@ -2,6 +2,7 @@ import glob
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import seaborn as sns
 import networkx as nx
 from .networks.graph import compute_node_positions
@@ -10,44 +11,94 @@ from .networks.metrics import compute_network_metrics
 
 
 def generate_network_plot(graph: nx.classes.graph.Graph,
+                          graph_df: pd.DataFrame,
                           network_metrics: dict,
                           partition: dict,
-                          colors: dict,
+                          node_colors: dict,
+                          edge_colors: dict=None,
+                          node_sizes_field: str=None,
+                          node_sizes_label_field: str=None,
+                          node_shapes_field: str=None,
+                          node_shapes: dict=None,
                           output_filepath: str=None,
                           k: float=.15,
-                          seed: int=42,
+                          seed: int=314,
                           plot_title: str='',
                           figsize: tuple=(12, 10),
                           dpi: int=500,
                           nx_kwargs: dict=None):
-    # set the desired figure resolution
+    # Set the desired figure resolution
     plt.rcParams['figure.dpi'] = dpi
     if not nx_kwargs:
-        nx_kwargs = {"edgecolors": "tab:gray"}
+        nx_kwargs = {"edgecolors": "none"}
     # Set the desired figure size (adjust width and height as needed)
     fig = plt.figure(figsize=figsize)
     node_positions = compute_node_positions(graph, k=k, seed=seed)
-    # Create lists of nodes in the graph
-    nodes = [node for node in graph.nodes]
-    # Draw the network graphs with circles for the 1st state and triangles for the 2nd state
-    nx.draw(graph,
-            nodelist=nodes,  # Only nodes in the 1st state
-            pos=node_positions,
-            node_color=[colors.get(partition.get(i), 'grey') for i in nodes],
-            node_shape='o',  # Circle shape for 1st state
-            node_size=50,
-            with_labels=False,
-            **nx_kwargs)
+    # Generate a list of colors for the edges
+    if edge_colors:
+        edge_colors_list = [edge_colors[graph[u][v]['relation']] for u, v in graph.edges()]
+    else:
+        edge_colors_list = ['black' for u, v in graph.edges()]
+    # Generate a dictionary mapping node IDs to their size representations, by node size
+    if node_sizes_field:
+        node_sizes_dict = dict(zip(graph_df['node_1'], graph_df[node_sizes_field]))
+    else:
+        graph_df['node_1_size'] = 50
+        node_sizes_dict = dict(zip(graph_df['node_1'], graph_df['node_1_size']))
+    # Generate a dicitionary mapping node IDs to disease states, by node shape
+    node_states_dict = {}
+    if node_shapes and node_shapes_field:
+        for attribute_value in node_shapes.keys():
+            node_states_dict[attribute_value] = graph_df.loc[graph_df[node_shapes_field]==attribute_value, 
+                                                            'node_1'].unique().tolist()
+    else:
+        node_shapes = {'all': 'o'}
+        node_states_dict['all'] = graph_df['node_1'].unique().tolist()
+    # Draw TCR network nodes
+    for disease_state, nodes_list in node_states_dict.items():
+        # Create lists of nodes in the graph
+        node_sizes_list = [node_sizes_dict[node] for node in nodes_list]
+        # Draw the network graphs with circles for the 1st state and triangles for the 2nd state
+        nx.draw_networkx_nodes(graph,
+                nodelist=nodes_list,  # Only nodes in the 1st state
+                pos=node_positions,
+                node_color=[node_colors.get(partition.get(i), 'grey') for i in nodes_list],
+                node_shape=node_shapes[disease_state],  # Circle shape for 1st state
+                node_size=node_sizes_list,
+                **nx_kwargs)
+    # Draw TCR network edges (weighted)
+    nx.draw_networkx_edges(graph, pos=node_positions, edge_color=edge_colors_list)
     # Annotate each cluster with its cluster number
-    for cluster, color in list(colors.items()):
+    for cluster, color in list(node_colors.items()):
         cluster_nodes = [node for node, part in partition.items() if part == cluster]
         x, y = zip(*[node_positions[node] for node in cluster_nodes])
         x_center, y_center = sum(x) / len(cluster_nodes), sum(y) / len(cluster_nodes)
         plt.text(x_center, y_center, f'{cluster}', fontsize=11, 
-                 color='black', ha='center', va='center', fontweight='bold')
-    # legend customization
+                 color=color, ha='center', va='center', fontweight='bold')
+    # Generate legends for node shapes
+    shape_legends = []
+    for disease_state, node_shape in node_shapes.items():
+        shape_legends += [
+            Line2D([0], [0], marker=node_shape, color='w', markerfacecolor='w', 
+                   markersize=10, label=disease_state, markeredgewidth=0.5, 
+                   markeredgecolor='k')
+        ]
+    # Generate legends for node sizes
+    size_legends = []
+    if node_sizes_label_field:
+        node_sizes_labels = dict(zip(graph_df[node_sizes_label_field], graph_df[node_sizes_field]))
+        node_sizes_labels_sorted = dict(sorted(node_sizes_labels.items(), key=lambda item: item[1]))
+        for node_size_label, node_size in node_sizes_labels_sorted.items():
+            size_legends += [
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='grey',
+                       label=node_size_label, markersize=np.sqrt(node_size), markeredgecolor='w')
+            ]
+    # Legend customization
+    first_legend = plt.legend(handles=shape_legends, loc='upper right', title='Disease State')
     ax = plt.gca()
-    # generate title for plot
+    ax.add_artist(first_legend)
+    plt.legend(handles=size_legends, loc='upper left', title='Abundance')
+    # Generate title for plot
     latex_symbol1 = r'$D_{total}$'
     latex_symbol2 = r'$\overline{S}(C_{x})_{x \in [0:k]}$'
     latex_symbol3 = r'$\overline{S}(C_{x}, C_{y})_{x,y \in [0:k], x \neq y}$'
@@ -56,11 +107,89 @@ def generate_network_plot(graph: nx.classes.graph.Graph,
               {latex_symbol1} = {network_metrics['total_density']:.6f}\n
               {latex_symbol2} = {np.mean(network_metrics['intracluster_density']):.4G}\n
               {latex_symbol3} = {np.mean(network_metrics['intercluster_density']):.4G}""")
+    # Save network plot to user-specified filepath (optional)
     if output_filepath:
         plt.savefig(output_filepath, 
                     bbox_inches='tight',
                     dpi=dpi)
     return plt.show()
+
+
+def generate_abundances_box_plot(meta: pd.DataFrame, 
+                                 treatment_group: str,
+                                 treatment_conditions: tuple,
+                                 target_variable: str, 
+                                 results_filepath: str=None,
+                                 title: str="",
+                                 shape_of_points: str='o',
+                                 alpha: float=0.6,
+                                 color_field: str=None,
+                                 color_dict: dict=None,
+                                 figsize=(14, 8),
+                                 y_limits=None,
+                                 show_count_annotations: bool=False):
+    count_data = []
+    data = []
+    color_labels = []
+    for condition in treatment_conditions:
+        data.append(meta.loc[meta[treatment_group]==condition, 
+                             target_variable].tolist())
+        count_data.append(meta.loc[meta[treatment_group]==condition, 
+                             'num_records'].tolist())
+    if color_field and color_dict:
+        for condition in treatment_conditions:
+            color_labels.append(meta.loc[meta[treatment_group]==condition, 
+                                color_field].unique()[0])
+    else:
+        color_dict = {
+            'all': 'black'
+        }
+        color_labels = ['all' for condition in treatment_conditions]
+    # Create a figure and axis
+    fig, ax = plt.subplots(figsize=figsize)
+    # customize median lines
+    medianprops = {'color': 'red', 'linestyle': 'dashed'}
+    # Create the box plot
+    boxplot = ax.boxplot(data, patch_artist=True, showfliers=False, medianprops=medianprops)
+    n_total_symbol = r'$N_{total}$'
+    n_clonos_symbol = r'$N_{clonotypes}$'
+    for i, data_subset in enumerate(data):
+        # Add individual data points
+        boxplot['boxes'][i].set(facecolor='white')  # Set the box color
+        xi_jitter = np.random.normal(i+1, 0.04, size=len(data_subset))
+        ax.plot(xi_jitter, data_subset, shape_of_points, alpha=alpha, 
+                color=color_dict[color_labels[i]])
+        if show_count_annotations:
+            ax.text(i+1, np.max(data_subset)+0.2, f'{n_clonos_symbol}={len(data_subset)}', 
+                    fontsize=10, ha='center', color='black')
+            ax.text(i+1, np.max(data_subset)+0.25, f'{n_total_symbol}={np.sum(count_data[i])}', 
+                    fontsize=10, ha='center', color='black')
+    color_legends = []
+    for i, label in enumerate(color_dict.keys()):
+        color_legends += [
+            Line2D([0], [0], marker='o', color=color_dict[label],
+                    markerfacecolor=color_dict[label], markersize=10, 
+                    label=label, markeredgewidth=0.5, markeredgecolor='k')
+                    ]
+    # Customize the plot (optional)
+    plt.legend(handles=color_legends, loc='upper right', title=color_field)
+    if y_limits:
+        ax.set_ylim(y_limits)
+    else:
+        ax.set_ylim((meta[target_variable].min(), meta[target_variable].max()+0.3))
+    ax.set_xlabel(f"{treatment_group}")
+    ax.set_xticklabels([str(condition) for condition in treatment_conditions])  # Add labels to the groups
+    ax.set_xticklabels([])
+    ax.set_ylabel(f"{target_variable}")  # Add a label to the y-axis
+
+    # Show the plot
+    plt.title(f'{title}')
+    plt.grid(True)  # Add grid lines (optional)
+    # Save the plot
+    if results_filepath:
+        # Save the plot
+        plt.savefig(results_filepath, bbox_inches="tight", dpi=350)
+    plt.show()
 
 
 def top_n_clonotypes(tcr_df: pd.DataFrame, 
@@ -122,6 +251,7 @@ def sequence_length_distributions(tcr_df: pd.DataFrame,
                 .agg(num_records=('num_records', 'sum'),
                      pct_records=('pct_records', 'sum'))
                 .reset_index())
+        # Filter out sequence lengths that have < 1% representation in the TCR data
         data = data.loc[data['pct_records']>=0.01].reset_index().copy()
         # Set style and context
         sns.barplot(data=data, x=seq_len_name, 
