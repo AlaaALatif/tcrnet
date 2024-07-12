@@ -5,6 +5,7 @@ import numpy as np
 
 
 def standardize_tcr_data(tcr_filepath: str, 
+                         clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                          technology_platform: str='10X', 
                          compression: str=None,
                          save_output: bool=False):
@@ -33,6 +34,10 @@ def standardize_tcr_data(tcr_filepath: str,
         raise NotImplementedError
     else:
         raise ValueError(f"{technology_platform} data not expected by the tool. Valid options are{valid_technology_platforms}")
+    # Replace missing sequence values with empty strings
+    for sequence_name in clonotype_definition:
+        tcr_df[sequence_name] = tcr_df[sequence_name].fillna('')
+        tcr_df[sequence_name] = tcr_df[sequence_name].astype(str)
     if save_output:
         tcr_df.to_csv(tcr_filepath.replace('.csv', '_standardized.csv'))
     return tcr_df
@@ -49,7 +54,8 @@ def preprocess_tcr_data(tcr_df: pd.DataFrame,
     print(f"# records before QC: {tcr_df.shape}")
     # Filter out records that are missing sequence information
     for sequence_name in clonotype_definition:
-        tcr_df = tcr_df.loc[~(tcr_df[sequence_name].isna())].copy()
+        tcr_df = tcr_df.loc[~(tcr_df[sequence_name].isna())
+                            |(tcr_df[sequence_name]=='')].copy()
     print(f"# records after QC 1 - Missing CDR sequences: {tcr_df.shape}")
     tcr_df['chain_identifier'] = tcr_df.apply(lambda row: '_'.join(row[col] for col in clonotype_definition), 
                                               axis=1)
