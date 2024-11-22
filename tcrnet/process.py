@@ -1,11 +1,14 @@
+import sys
 import glob
 import pandas as pd
 import numpy as np
+import scipy.stats as stats
+from statsmodels.stats.multitest import fdrcorrection
 
 
 
 def standardize_tcr_data(tcr_filepath: str, 
-                         clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
+                         clonotype_definition: list=['cdr1_nt', 'cdr2_nt', 'cdr3_nt'],
                          technology_platform: str='10X', 
                          compression: str=None,
                          save_output: bool=False):
@@ -30,6 +33,8 @@ def standardize_tcr_data(tcr_filepath: str,
             "cdr3": "cdr3_nt",
             "locus": "chain",
         }, inplace=True)
+        tcr_df.reset_index(inplace=True, drop=True)
+        tcr_df['barcode'] = tcr_df.index
     elif technology_platform.lower() == 'virafest':
         raise NotImplementedError
     else:
@@ -44,9 +49,9 @@ def standardize_tcr_data(tcr_filepath: str,
 
 
 def preprocess_tcr_data(tcr_df: pd.DataFrame,
-                        sample_id: str,
                         clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
-                        chain: str='alpha-beta'):
+                        chain: str='alpha-beta',
+                        sample_id: str=""):
     """This function ingests VDJ data from 10X, Omniscope, or ViraFEST 
     and performs preprocessing steps, including chain-pairing if applicable."""
     # Valid options for immune repertoire receptor chains
@@ -54,8 +59,8 @@ def preprocess_tcr_data(tcr_df: pd.DataFrame,
     print(f"# records before QC: {tcr_df.shape}")
     # Filter out records that are missing sequence information
     for sequence_name in clonotype_definition:
-        tcr_df = tcr_df.loc[~(tcr_df[sequence_name].isna())
-                            |(tcr_df[sequence_name]=='')].copy()
+        tcr_df = tcr_df.loc[(~tcr_df[sequence_name].isna())
+                           &(tcr_df[sequence_name]!='')].copy()
     print(f"# records after QC 1 - Missing CDR sequences: {tcr_df.shape}")
     tcr_df['chain_identifier'] = tcr_df.apply(lambda row: '_'.join(row[col] for col in clonotype_definition), 
                                               axis=1)
@@ -73,27 +78,40 @@ def preprocess_tcr_data(tcr_df: pd.DataFrame,
         tcr_df['chain_identifier_beta'] = tcr_df['chain_identifier_beta'].fillna('')
         print(f"# records after {chain} Pairing: {tcr_df.shape}")
         tcr_df = _apply_alpha_beta_qc(tcr_df)
-        print(f"# records after QC2 - Missing Chain Pairings: {tcr_df.shape}")
+        print(f"# records after QC 2 - Missing Chain Pairings: {tcr_df.shape}")
     elif chain=='beta':
         tcr_df.rename(columns={"chain_identifier": "chain_identifier_beta"}, inplace=True)
         tcr_df['chain_identifier_alpha'] = ''
-        # TODO: implement apply_alpha_qc
         tcr_df = _apply_beta_qc(tcr_df)
-        print(f"# records after QC2 - Missing Beta-Chain Sequence Information: {tcr_df.shape}")
+        print(f"# records after QC 2 - Missing Beta-Chain Sequence Information: {tcr_df.shape}")
     elif chain=='alpha':
         tcr_df.rename(columns={"chain_identifier": "chain_identifier_alpha"}, inplace=True)
         tcr_df['chain_identifier_beta'] = ''
-        # TODO: implement apply_beta_qc
         tcr_df = _apply_alpha_qc(tcr_df)
-        print(f"# records after QC2 - Missing Alpha-Chain Sequence Information: {tcr_df.shape}")
+        print(f"# records after QC 2 - Missing Alpha-Chain Sequence Information: {tcr_df.shape}")
     else: 
         raise ValueError(f"{chain} is not a valid mode for processing alpha-beta TCRs. Choose from {valid_chain_opts}")
-    tcr_df['sample_id'] = sample_id
+    if "sample_id" not in tcr_df.columns:
+        tcr_df['sample_id'] = sample_id
     return tcr_df
 
 
+def downsample_tcr_dataframes(tcrdfs_list: list):
+    """This function downsamples each dataframe in the input list based on the minimum number of 
+    TCR records in the list provided."""
+    # compute downsampling size
+    downsample_size = sys.maxsize
+    for vdjdf in tcrdfs_list:
+        downsample_size = min(vdjdf.shape[0], downsample_size)
+    # downsample each vdjdf
+    downsampled_tcrdfs_list = []
+    for tcrdf in tcrdfs_list:
+        downsampled_tcrdfs_list.append(tcrdf.sample(downsample_size))
+    return downsampled_tcrdfs_list
+
+
 def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
-                                 clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
+                                 clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
                                  abundance_column_name: str=None,
                                  chain: str='alpha-beta'):
     """This function computes clonotype abundances from processed VDJ data."""
@@ -140,6 +158,87 @@ def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
         tcr_counts[f'{cdr_seq}_length'] = tcr_counts[cdr_seq].str.len()
     return tcr_counts.sort_values(by='pct_records', ascending=False)
 
+def compute_longitudinal_clonotype_expansion(vdj_counts_basket: tuple,
+                                             foldchange_threshold: float,
+                                             pvalue_threshold: float,
+                                             clonotype_definition: list,
+                                             chain: str):
+    """This function fuses clonotype data from PRE/POST treatment of the same PID."""
+    if len(vdj_counts_basket)==1:
+        raise ValueError(f"Input data basket has 1 dataframe, we expect atleast 2 dataframes to perform longitudinal analyses")
+    elif len(vdj_counts_basket)>2:
+        raise NotImplementedError(f"Input data basket has more than 2 dataframes, this function currently only supports pair-wise analyses")
+    vdj_mrg_counts = pd.merge(vdj_counts_basket[0], vdj_counts_basket[1], 
+                              on='clonotype_id', how='outer', suffixes=('_pre', '_post'))
+    # Add missing values for missing clonotypes (i.e. 0s)
+    vdj_mrg_counts = vdj_mrg_counts.fillna(0)
+    # Consolidate sample ID
+    vdj_mrg_counts['sample_id'] = vdj_mrg_counts['sample_id_post']
+    # Consolidate sequence information
+    for sn in clonotype_definition:
+        if 'alpha' in chain:
+            vdj_mrg_counts[f'alpha_{sn}'] = vdj_mrg_counts[f'alpha_{sn}_pre']
+            vdj_mrg_counts.loc[vdj_mrg_counts[f'alpha_{sn}_pre']==0, f'alpha_{sn}'] = vdj_mrg_counts[f'alpha_{sn}_post']
+        if 'beta' in chain:
+            vdj_mrg_counts[f'beta_{sn}'] = vdj_mrg_counts[f'beta_{sn}_pre']
+            vdj_mrg_counts.loc[vdj_mrg_counts[f'beta_{sn}_pre']==0, f'beta_{sn}'] = vdj_mrg_counts[f'beta_{sn}_post']
+    vdj_mrg_counts.loc[vdj_mrg_counts['sample_id_post']==0, 'sample_id'] = vdj_mrg_counts['sample_id_pre']
+    vdj_mrg_counts['num_records_diff'] = vdj_mrg_counts['num_records_post'] - vdj_mrg_counts['num_records_pre']
+    vdj_mrg_counts['pct_records_diff'] = vdj_mrg_counts['pct_records_post'] - vdj_mrg_counts['pct_records_pre']
+    num_expanded_clonotypes = vdj_mrg_counts.loc[vdj_mrg_counts['num_records_diff']>0].shape
+    print(f"# Clonotypes that expanded post treatment: {num_expanded_clonotypes}")
+    mean_expansion = vdj_mrg_counts.loc[vdj_mrg_counts['num_records_diff']>0, 'pct_records_diff'].mean()
+    print(f"Mean proportional clonotype expansion post treatment: {mean_expansion*100}%")
+    num_contracted_clonotypes = vdj_mrg_counts.loc[vdj_mrg_counts['num_records_diff']<0].shape
+    print(f"# Clonotypes that contracted post treatment: {num_contracted_clonotypes}")
+    mean_contraction = -1*vdj_mrg_counts.loc[vdj_mrg_counts['num_records_diff']<0, 'pct_records_diff'].mean()
+    print(f"Mean proportional clonotype contraction post treatment: {mean_contraction*100}%")
+    # add 1 to each clonotype count i.e. adding pseudocounts to clonotypes missing in one of the two timepoints
+    vdj_mrg_counts['num_records_pre'] += 1
+    vdj_mrg_counts['num_records_post'] += 1
+    # compute total counts pre/post vaccine for the patient
+    vdj_mrg_counts['total_pre'] = vdj_mrg_counts['num_records_pre'].sum()
+    vdj_mrg_counts['total_post'] = vdj_mrg_counts['num_records_post'].sum()
+    # compute relative clonotype frequency
+    vdj_mrg_counts['frequency_records_pre'] = vdj_mrg_counts['num_records_pre'] / vdj_mrg_counts['total_pre']
+    vdj_mrg_counts['frequency_records_post'] = vdj_mrg_counts['num_records_post'] / vdj_mrg_counts['total_post']
+    # compute log10 transformation of relative frequencies
+    vdj_mrg_counts['log10_freq_pre'] = np.log10(vdj_mrg_counts['frequency_records_pre'])
+    vdj_mrg_counts['log10_freq_post'] = np.log10(vdj_mrg_counts['frequency_records_post'])
+    # compute log2 fold-change in clonotype frequency after vaccination
+    vdj_mrg_counts['log2FC'] = np.log2(vdj_mrg_counts['frequency_records_post']/vdj_mrg_counts['frequency_records_pre'])
+    # compute p-values from Fisher's exact test on absolute counts
+    vdj_mrg_counts['fisher_pvalue'] = vdj_mrg_counts.apply(apply_fishers_test, axis=1)
+    # compute adjusted p-values using false discovery rate
+    vdj_mrg_counts['fisher_adjusted_pvalue'] = fdrcorrection(vdj_mrg_counts['fisher_pvalue'])[1]
+    # categorize each clonotype as either stable, expanded, or contracted
+    vdj_mrg_counts['clonotype_dynamic_state'] = 'stable'
+    vdj_mrg_counts.loc[(vdj_mrg_counts['log2FC']>=foldchange_threshold)
+                   &(vdj_mrg_counts['fisher_adjusted_pvalue']<pvalue_threshold), 
+                    'clonotype_dynamic_state'] = 'expanded'
+    vdj_mrg_counts.loc[(vdj_mrg_counts['log2FC']<=-foldchange_threshold)
+                   &(vdj_mrg_counts['fisher_adjusted_pvalue']<pvalue_threshold), 
+                    'clonotype_dynamic_state'] = 'contracted'
+    # reverse the effects of the pseudocounts before returning final results
+    vdj_mrg_counts['num_records_pre'] -= 1
+    vdj_mrg_counts['num_records_post'] -= 1
+    # compute total counts pre/post vaccine for the patient
+    vdj_mrg_counts['total_pre'] = vdj_mrg_counts['num_records_pre'].sum()
+    vdj_mrg_counts['total_post'] = vdj_mrg_counts['num_records_post'].sum()
+    # classify each clonotype as either newly or dual expanded/contracted
+    vdj_mrg_counts['clonotype_dynamic_mode'] = 'newly'
+    vdj_mrg_counts.loc[(vdj_mrg_counts['clonotype_dynamic_state']=='expanded')
+                      &(vdj_mrg_counts['num_records_pre']>=1), 'clonotype_dynamic_mode'] = 'dual'
+    vdj_mrg_counts.loc[(vdj_mrg_counts['clonotype_dynamic_state']=='contracted')
+                      &(vdj_mrg_counts['num_records_post']>=1), 'clonotype_dynamic_mode'] = 'dual'
+    return vdj_mrg_counts.sort_values(by=['log2FC', 'num_records_diff'], ascending=False)
+
+def apply_fishers_test(x):
+    data = [[x['num_records_pre'], x['num_records_post']], 
+            [x['total_pre']-x['num_records_pre'], 
+             x['total_post']-x['num_records_post']]]
+    _, pvalue = stats.fisher_exact(data)
+    return pvalue
 
 def _apply_beta_qc(tcr_df: pd.DataFrame):
     """This internal function ingests VDJ data during processing and applies quality control (QC) steps.
@@ -148,7 +247,7 @@ def _apply_beta_qc(tcr_df: pd.DataFrame):
     chain_qc_df = tcr_df.loc[(tcr_df['chain_identifier_alpha']=='')
                             &(tcr_df['chain_identifier_beta']!='')].copy()
     chain_qc_df['clonotype_id'] = tcr_df['chain_identifier_beta'].copy()
-    return chain_qc_df.reset_index().rename(columns={'index': 'barcode'})
+    return chain_qc_df
 
 
 def _apply_alpha_qc(tcr_df: pd.DataFrame):

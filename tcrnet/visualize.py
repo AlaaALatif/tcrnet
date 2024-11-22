@@ -30,7 +30,7 @@ def generate_network_plot(graph: nx.classes.graph.Graph,
     # Set the desired figure resolution
     plt.rcParams['figure.dpi'] = dpi
     if not nx_kwargs:
-        nx_kwargs = {"edgecolors": "none"}
+        nx_kwargs = {"edgecolors": "black"}
     # Set the desired figure size (adjust width and height as needed)
     fig = plt.figure(figsize=figsize)
     node_positions = compute_node_positions(graph, k=k, seed=seed)
@@ -242,8 +242,9 @@ def sequence_length_distributions(tcr_df: pd.DataFrame,
                                   dpi: int=450):
     """This function generates a panel of bar plots showing length distributions of various 
     segments of the TCR sequences (default: CDR1,CDR2,CDR3 of both alpha and beta chains)"""
+    num_columns = int(np.ceil(len(seq_len_colnames)/3))
     # Setting up the figure and axes for the subplots
-    fig, axs = plt.subplots(2, 3, figsize=figsize)  # 2 rows, 3 columns
+    fig, axs = plt.subplots(num_columns, 3, figsize=figsize)  # 2 rows, 3 columns
     for i, ax in enumerate(axs.flat):
         seq_len_name = seq_len_colnames[i]
         data = (tcr_df
