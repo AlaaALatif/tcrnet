@@ -9,22 +9,27 @@ from tcrdist.html_colors import get_html_colors
 
 
 def compute_tcrdist(qtcr_df: pd.DataFrame,
-                    clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
+                    clonotype_definition: list=['cdr1_aa', 'cdr2_aa', 'cdr3_aa'],
                     chain: str='alpha-beta',
+                    clonotype_count_column: str='num_records',
+                    clonotype_frequency_column: str='pct_records',
                     num_cpus: int=5):
     # Valid options for immune repertoire receptor chains
     valid_chain_opts = ['alpha', 'beta', 'alpha-beta']
     ntcr_df = qtcr_df.rename(columns = {
-        'num_records': 'count',
-        'pct_records': 'frequency',
+        clonotype_count_column: 'count',
+        clonotype_frequency_column: 'frequency',
         'clonotype_id': 'clone_id'
         }).copy()
     alpha_cdr_fields = {
-        f'alpha_{sequence_name}': f'{sequence_name}_a_aa' for sequence_name in clonotype_definition
-        }
+        f'alpha_{sn}': f"{sn.split('_')[0]}_a_aa" if 'aa' in sn else f"{sn.split('_')[0]}_a_nt"
+        for sn in clonotype_definition
+    }
     beta_cdr_fields = {
-        f'beta_{sequence_name}': f'{sequence_name}_b_aa' for sequence_name in clonotype_definition
-        }
+        f'beta_{sn}': f"{sn.split('_')[0]}_b_aa" if 'aa' in sn else f"{sn.split('_')[0]}_b_nt"
+        for sn in clonotype_definition
+    }
+    print(beta_cdr_fields)
     if chain == 'alpha-beta':
         all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
         ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
@@ -53,7 +58,7 @@ def compute_tcrdist(qtcr_df: pd.DataFrame,
     beta_kargs = {
         cdr_field_name: {"use_numba": True} for cdr_field_name in all_field_names
         }
-    # print(f"Beta kargs: {beta_kargs}")
+    print(f"Beta kargs: {beta_weights}")
     # compute similarity measures using tcrdist
     distance_dict = tcrdist.rep_funcs._pws(df = ntcr_df,
                         metrics = beta_metrics,

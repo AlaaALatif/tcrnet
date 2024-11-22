@@ -10,19 +10,24 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                              clonotype_definition: list=['cdr1', 'cdr2', 'cdr3'],
                              chain: str='alpha-beta',
                              analysis_mode: str='private',
-                             edge_threshold: int=150,
+                             edge_threshold: int=64,
+                             count_column_name: str='count',
                              count_threshold: int=2):
+    # Valid options for immune repertoire receptor chains
+    valid_chain_opts = ['alpha', 'beta', 'alpha-beta']
+    # Initialize list collecting network data
     network = list()
     # create set of nearest neighbors for each clonotype
     nearest_neighbors = compute_nearest_neighbors(distance_matrix, edge_threshold)
     # collect CDR-related field names
     alpha_cdr_fields = {
-        f'alpha_{sequence_name}': f'{sequence_name}_a_aa' for sequence_name in clonotype_definition
-        }
-    # ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
+        f'alpha_{sn}': f"{sn.split('_')[0]}_a_aa" if 'aa' in sn else f"{sn.split('_')[0]}_a_nt"
+        for sn in clonotype_definition
+    }
     beta_cdr_fields = {
-        f'beta_{sequence_name}': f'{sequence_name}_b_aa' for sequence_name in clonotype_definition
-        }
+        f'beta_{sn}': f"{sn.split('_')[0]}_b_aa" if 'aa' in sn else f"{sn.split('_')[0]}_b_nt"
+        for sn in clonotype_definition
+    }
     if chain == 'alpha-beta':
         all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
     elif chain == 'beta':
@@ -36,8 +41,9 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
     # populate our network with nodes as clonotypes, and edges as similarity-distance between them
     for n1_idx, n1_neighbors in enumerate(nearest_neighbors):
         for n2_idx in n1_neighbors:
+            record_data = []
             if n1_idx!=n2_idx:
-                record_data = []
+                # record_data = []
                 record_data.extend([
                     n1_idx,
                     n2_idx,
@@ -55,11 +61,13 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                     ntcr_df['sample_id'].iloc[n1_idx],
                     ntcr_df['sample_id'].iloc[n2_idx],
                     ntcr_df['count'].iloc[n1_idx],
-                    ntcr_df['count'].iloc[n2_idx]
+                    ntcr_df['count'].iloc[n2_idx],
+                    ntcr_df['frequency'].iloc[n1_idx],
+                    ntcr_df['frequency'].iloc[n2_idx]
                 ])
                 network.append(record_data)
-            elif ntcr_df['count'].iloc[n1_idx] >= count_threshold and len(n1_neighbors)==1:
-                record_data = []
+            elif ntcr_df[count_column_name].iloc[n1_idx] >= count_threshold and len(n1_neighbors)==1:
+                # record_data = []
                 record_data.extend([
                     n1_idx,
                     n2_idx,
@@ -77,7 +85,9 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
                     ntcr_df['sample_id'].iloc[n1_idx],
                     ntcr_df['sample_id'].iloc[n2_idx],
                     ntcr_df['count'].iloc[n1_idx],
-                    ntcr_df['count'].iloc[n2_idx]
+                    ntcr_df['count'].iloc[n2_idx],
+                    ntcr_df['frequency'].iloc[n1_idx],
+                    ntcr_df['frequency'].iloc[n2_idx]
                 ])
                 network.append(record_data)
     # create a dataframe representation of our network graph
@@ -88,7 +98,8 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
     network_columns += ['k_neighbors', 'is_island',
                         'clone_id_1', 'clone_id_2',
                         'sample_id_1', 'sample_id_2',
-                        'count_1', 'count_2']
+                        'count_1', 'count_2',
+                        'frequency_1', 'frequency_2']
     network_df = pd.DataFrame(network, columns = network_columns)
     # calculate the weight for each edge (connection between two TCR clonotypes)
     network_df['weight'] = (edge_threshold - network_df['distance']) / edge_threshold
