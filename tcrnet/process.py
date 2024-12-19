@@ -1,3 +1,4 @@
+from tqdm import tqdm
 import sys
 import glob
 import pandas as pd
@@ -25,8 +26,11 @@ def standardize_tcr_data(tcr_filepath: str,
             "umis": "umi_count"
         }, inplace=True)
     elif technology_platform.lower() == 'omniscope':
+        # Load TCR file
         tcr_df = pd.read_csv(tcr_filepath, compression=compression)
+        # Filter for TCR records that are productive
         tcr_df = tcr_df.loc[(tcr_df['productive']=='T')].copy()
+        # Column name reformatting
         tcr_df.rename(columns={
             "cdr1": "cdr1_nt",
             "cdr2": "cdr2_nt",
@@ -34,7 +38,12 @@ def standardize_tcr_data(tcr_filepath: str,
             "locus": "chain",
         }, inplace=True)
         tcr_df.reset_index(inplace=True, drop=True)
+        # Create pseudo-barcode for each TCR record.
         tcr_df['barcode'] = tcr_df.index
+        # Reformat VDJ gene calls -- remove allelic information.
+        tcr_df['v_call'] = tcr_df['v_call'].apply(lambda x: x.split("*")[0])
+        tcr_df['v_call'] = tcr_df['v_call'].apply(lambda x: x.split("*")[0])
+        tcr_df['j_call'] = tcr_df['j_call'].apply(lambda x: x.split("*")[0])
     elif technology_platform.lower() == 'virafest':
         raise NotImplementedError
     else:
@@ -183,6 +192,7 @@ def compute_longitudinal_clonotype_expansion(vdj_counts_basket: tuple,
             vdj_mrg_counts[f'beta_{sn}'] = vdj_mrg_counts[f'beta_{sn}_pre']
             vdj_mrg_counts.loc[vdj_mrg_counts[f'beta_{sn}_pre']==0, f'beta_{sn}'] = vdj_mrg_counts[f'beta_{sn}_post']
     vdj_mrg_counts.loc[vdj_mrg_counts['sample_id_post']==0, 'sample_id'] = vdj_mrg_counts['sample_id_pre']
+    vdj_mrg_counts['sample_id'] = vdj_mrg_counts['sample_id'].apply(lambda x: x.split('_')[0])
     vdj_mrg_counts['num_records_diff'] = vdj_mrg_counts['num_records_post'] - vdj_mrg_counts['num_records_pre']
     vdj_mrg_counts['pct_records_diff'] = vdj_mrg_counts['pct_records_post'] - vdj_mrg_counts['pct_records_pre']
     num_expanded_clonotypes = vdj_mrg_counts.loc[vdj_mrg_counts['num_records_diff']>0].shape
@@ -208,8 +218,10 @@ def compute_longitudinal_clonotype_expansion(vdj_counts_basket: tuple,
     # compute log2 fold-change in clonotype frequency after vaccination
     vdj_mrg_counts['log2FC'] = np.log2(vdj_mrg_counts['frequency_records_post']/vdj_mrg_counts['frequency_records_pre'])
     # compute p-values from Fisher's exact test on absolute counts
-    vdj_mrg_counts['fisher_pvalue'] = vdj_mrg_counts.apply(apply_fishers_test, axis=1)
+    vdj_mrg_counts['fisher_pvalue'] = apply_fishers_test(vdj_mrg_counts)
+    # vdj_mrg_counts['fisher_pvalue'] = vdj_mrg_counts.apply(apply_fishers_test, axis=1)
     # compute adjusted p-values using false discovery rate
+    print("p-value correction for multiple hypothesis testing.")
     vdj_mrg_counts['fisher_adjusted_pvalue'] = fdrcorrection(vdj_mrg_counts['fisher_pvalue'])[1]
     # categorize each clonotype as either stable, expanded, or contracted
     vdj_mrg_counts['clonotype_dynamic_state'] = 'stable'
@@ -233,12 +245,29 @@ def compute_longitudinal_clonotype_expansion(vdj_counts_basket: tuple,
                       &(vdj_mrg_counts['num_records_post']>=1), 'clonotype_dynamic_mode'] = 'dual'
     return vdj_mrg_counts.sort_values(by=['log2FC', 'num_records_diff'], ascending=False)
 
-def apply_fishers_test(x):
-    data = [[x['num_records_pre'], x['num_records_post']], 
-            [x['total_pre']-x['num_records_pre'], 
-             x['total_post']-x['num_records_post']]]
-    _, pvalue = stats.fisher_exact(data)
-    return pvalue
+def apply_fishers_test(merged_tcr_counts: pd.DataFrame):
+    # Extract constants and arrays
+    total_pre = merged_tcr_counts['total_pre'].iloc[0]
+    total_post = merged_tcr_counts['total_post'].iloc[0]
+    print("test fishers enhancement")
+    pre_counts = merged_tcr_counts['num_records_pre'].values
+    post_counts = merged_tcr_counts['num_records_post'].values
+
+    # Compute p-values in a loop with a progress bar
+    pvalues = []
+    for pre_val, post_val in tqdm(zip(pre_counts, post_counts), total=len(pre_counts), desc="Computing Fisher's exact tests"):
+        table = [[pre_val, total_pre - pre_val],
+                 [post_val, total_post - post_val]]
+        _, pval = stats.fisher_exact(table)
+        pvalues.append(pval)
+
+    return pvalues
+
+    # data = [[x['num_records_pre'], x['num_records_post']], 
+    #         [x['total_pre']-x['num_records_pre'], 
+    #          x['total_post']-x['num_records_post']]]
+    # _, pvalue = stats.fisher_exact(data)
+    # return pvalue
 
 def _apply_beta_qc(tcr_df: pd.DataFrame):
     """This internal function ingests VDJ data during processing and applies quality control (QC) steps.
