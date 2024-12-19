@@ -10,7 +10,7 @@ def read(fname):
 
 setup(
     name='tcrnet',
-    version='0.0.1',
+    version='0.2.1',
     description='Bioinformatics library for the processing and analysis of T-Cell Receptor (TCR) data.',
     author='Alaa Abdel Latif',
     author_email='al.a.latif94@gmail.com',
