@@ -18,7 +18,7 @@ setup(
     packages=find_packages(include=['tcrnet', 'tcrnet.*']),
     install_requires=[
         'pandas>=2.1.4',
-        'numpy>=1.24.3',
+        'numpy==2.1',
         'matplotlib>=2.2.0',
         'seaborn>=0.12.2',
         'jupyterlab'
