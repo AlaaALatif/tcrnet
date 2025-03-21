@@ -231,12 +231,12 @@ def top_n_clonotypes(tcr_df: pd.DataFrame,
 
 
 def sequence_length_distributions(tcr_df: pd.DataFrame,
-                                  seq_len_colnames: list=['alpha_cdr1_length', 
-                                                          'alpha_cdr2_length', 
-                                                          'alpha_cdr3_length', 
-                                                          'beta_cdr1_length', 
-                                                          'beta_cdr2_length', 
-                                                          'beta_cdr3_length'],
+                                  seq_len_colnames: list=['alpha_cdr1_aa_length', 
+                                                          'alpha_cdr2_aa_length', 
+                                                          'alpha_cdr3_aa_length', 
+                                                          'beta_cdr1_aa_length', 
+                                                          'beta_cdr2_aa_length', 
+                                                          'beta_cdr3_aa_length'],
                                   output_filepath: str=None,
                                   figsize: tuple=(15, 10),
                                   dpi: int=450):
