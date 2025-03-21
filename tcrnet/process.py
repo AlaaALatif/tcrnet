@@ -129,12 +129,12 @@ def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
     # compute number of cells per clonotype
     if abundance_column_name:
         tcr_counts = (processed_tcr_df
-                  .groupby(['sample_id', 'clonotype_id'])
+                  .groupby(['sample_id', 'cdr3_aa', 'clonotype_id'])
                   .agg(num_records=(abundance_column_name, 'sum'))
                   .reset_index())
     else:
         tcr_counts = (processed_tcr_df
-                  .groupby(['sample_id', 'clonotype_id'])
+                  .groupby(['sample_id', 'cdr3_aa', 'clonotype_id'])
                   .agg(num_records=('barcode', 'nunique'))
                   .reset_index())
     tcr_total_counts = (tcr_counts
@@ -156,6 +156,7 @@ def compute_clonotype_abundances(processed_tcr_df: pd.DataFrame,
         for i, sequence_name in enumerate(clonotype_definition):
             tcr_counts[f'beta_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('_')[i])
             cdr_sequence_fields.extend([f'beta_{sequence_name}'])
+        tcr_counts.rename(columns={'cdr3_aa': 'beta_cdr3_aa'}, inplace=True)
     elif chain == 'alpha':
         for i, sequence_name in enumerate(clonotype_definition):
             tcr_counts[f'alpha_{sequence_name}'] = tcr_counts['clonotype_id'].apply(lambda x: x.split('_')[i])
@@ -204,19 +205,23 @@ def compute_longitudinal_clonotype_expansion(vdj_counts_basket: tuple,
     mean_contraction = -1*vdj_mrg_counts.loc[vdj_mrg_counts['num_records_diff']<0, 'pct_records_diff'].mean()
     print(f"Mean proportional clonotype contraction post treatment: {mean_contraction*100}%")
     # add 1 to each clonotype count i.e. adding pseudocounts to clonotypes missing in one of the two timepoints
-    vdj_mrg_counts['num_records_pre'] += 1
-    vdj_mrg_counts['num_records_post'] += 1
+    vdj_mrg_counts['num_records_pseudo_pre'] = vdj_mrg_counts['num_records_pre'] + 1
+    vdj_mrg_counts['num_records_pseudo_post'] = vdj_mrg_counts['num_records_post'] + 1
     # compute total counts pre/post vaccine for the patient
     vdj_mrg_counts['total_pre'] = vdj_mrg_counts['num_records_pre'].sum()
     vdj_mrg_counts['total_post'] = vdj_mrg_counts['num_records_post'].sum()
+    vdj_mrg_counts['total_pseudo_pre'] = vdj_mrg_counts['num_records_pseudo_pre'].sum()
+    vdj_mrg_counts['total_pseudo_post'] = vdj_mrg_counts['num_records_pseudo_post'].sum()
     # compute relative clonotype frequency
     vdj_mrg_counts['frequency_records_pre'] = vdj_mrg_counts['num_records_pre'] / vdj_mrg_counts['total_pre']
     vdj_mrg_counts['frequency_records_post'] = vdj_mrg_counts['num_records_post'] / vdj_mrg_counts['total_post']
+    vdj_mrg_counts['frequency_records_pseudo_pre'] = vdj_mrg_counts['num_records_pseudo_pre'] / vdj_mrg_counts['total_pseudo_pre']
+    vdj_mrg_counts['frequency_records_pseudo_post'] = vdj_mrg_counts['num_records_pseudo_post'] / vdj_mrg_counts['total_pseudo_post']
     # compute log10 transformation of relative frequencies
-    vdj_mrg_counts['log10_freq_pre'] = np.log10(vdj_mrg_counts['frequency_records_pre'])
-    vdj_mrg_counts['log10_freq_post'] = np.log10(vdj_mrg_counts['frequency_records_post'])
+    vdj_mrg_counts['log10_freq_pre'] = np.log10(vdj_mrg_counts['frequency_records_pseudo_pre'])
+    vdj_mrg_counts['log10_freq_post'] = np.log10(vdj_mrg_counts['frequency_records_pseudo_post'])
     # compute log2 fold-change in clonotype frequency after vaccination
-    vdj_mrg_counts['log2FC'] = np.log2(vdj_mrg_counts['frequency_records_post']/vdj_mrg_counts['frequency_records_pre'])
+    vdj_mrg_counts['log2FC'] = np.log2(vdj_mrg_counts['frequency_records_pseudo_post']/vdj_mrg_counts['frequency_records_pseudo_pre'])
     # compute p-values from Fisher's exact test on absolute counts
     vdj_mrg_counts['fisher_pvalue'] = apply_fishers_test(vdj_mrg_counts)
     # vdj_mrg_counts['fisher_pvalue'] = vdj_mrg_counts.apply(apply_fishers_test, axis=1)
@@ -231,12 +236,6 @@ def compute_longitudinal_clonotype_expansion(vdj_counts_basket: tuple,
     vdj_mrg_counts.loc[(vdj_mrg_counts['log2FC']<=-foldchange_threshold)
                    &(vdj_mrg_counts['fisher_adjusted_pvalue']<pvalue_threshold), 
                     'clonotype_dynamic_state'] = 'contracted'
-    # reverse the effects of the pseudocounts before returning final results
-    vdj_mrg_counts['num_records_pre'] -= 1
-    vdj_mrg_counts['num_records_post'] -= 1
-    # compute total counts pre/post vaccine for the patient
-    vdj_mrg_counts['total_pre'] = vdj_mrg_counts['num_records_pre'].sum()
-    vdj_mrg_counts['total_post'] = vdj_mrg_counts['num_records_post'].sum()
     # classify each clonotype as either newly or dual expanded/contracted
     vdj_mrg_counts['clonotype_dynamic_mode'] = 'newly'
     vdj_mrg_counts.loc[(vdj_mrg_counts['clonotype_dynamic_state']=='expanded')
