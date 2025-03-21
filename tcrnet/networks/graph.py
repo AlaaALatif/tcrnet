@@ -20,24 +20,47 @@ def generate_graph_dataframe(ntcr_df: pd.DataFrame,
     # create set of nearest neighbors for each clonotype
     nearest_neighbors = compute_nearest_neighbors(distance_matrix, edge_threshold)
     # collect CDR-related field names
-    alpha_cdr_fields = {
-        f'alpha_{sn}': f"{sn.split('_')[0]}_a_aa" if 'aa' in sn else f"{sn.split('_')[0]}_a_nt"
-        for sn in clonotype_definition
+    # alpha_cdr_fields = {
+    #     f'alpha_{sn}': f"{sn.split('_')[0]}_a_aa" if 'aa' in sn else f"{sn.split('_')[0]}_a_nt"
+    #     for sn in clonotype_definition
+    # }
+    # beta_cdr_fields = {
+    #     f'beta_{sn}': f"{sn.split('_')[0]}_b_aa" if 'aa' in sn else f"{sn.split('_')[0]}_b_nt"
+    #     for sn in clonotype_definition
+    # }
+    alpha_tcrdist_column_renamer = {
+        'alpha_cdr1_aa': 'cdr1_a_aa',
+        'alpha_cdr2_aa': 'cdr2_a_aa',
+        'alpha_v_call': 'v_a_gene',
+        'alpha_j_call': 'j_a_gene',
+        'alpha_cdr3_aa': 'cdr3_a_aa',
+        'alpha_cdr1_nt': 'cdr1_a_nt',
+        'alpha_cdr2_nt': 'cdr2_a_nt',
+        'alpha_cdr3_nt': 'cdr3_a_nt'
     }
-    beta_cdr_fields = {
-        f'beta_{sn}': f"{sn.split('_')[0]}_b_aa" if 'aa' in sn else f"{sn.split('_')[0]}_b_nt"
-        for sn in clonotype_definition
+    beta_tcrdist_column_renamer = {
+        'beta_cdr1_aa': 'cdr1_b_aa',
+        'beta_cdr2_aa': 'cdr2_b_aa',
+        'beta_v_call': 'v_b_gene',
+        'beta_j_call': 'j_b_gene',
+        'beta_cdr3_aa': 'cdr3_b_aa',
+        'beta_cdr1_nt': 'cdr1_b_nt',
+        'beta_cdr2_nt': 'cdr2_b_nt',
+        'beta_cdr3_nt': 'cdr3_b_nt'
     }
     if chain == 'alpha-beta':
-        all_field_names = list(alpha_cdr_fields.values()) + list(beta_cdr_fields.values())
+        all_field_names = [alpha_tcrdist_column_renamer[x] for x in alpha_tcrdist_column_renamer.keys() if '_'.join(x.split('_')[1:]) in clonotype_definition] + [beta_tcrdist_column_renamer[x] for x in beta_tcrdist_column_renamer.keys() if '_'.join(x.split('_')[1:]) in clonotype_definition]
+        ntcr_df = ntcr_df.rename(columns=alpha_tcrdist_column_renamer).copy()
+        ntcr_df = ntcr_df.rename(columns=beta_tcrdist_column_renamer).copy()
     elif chain == 'beta':
-        all_field_names = list(beta_cdr_fields.values())
-        ntcr_df = ntcr_df.rename(columns=beta_cdr_fields).copy()
+        all_field_names = [beta_tcrdist_column_renamer[x] for x in beta_tcrdist_column_renamer.keys() if '_'.join(x.split('_')[1:]) in clonotype_definition]
+        ntcr_df = ntcr_df.rename(columns=beta_tcrdist_column_renamer).copy()
     elif chain == 'alpha':
-        all_field_names = list(alpha_cdr_fields.values())
-        ntcr_df = ntcr_df.rename(columns=alpha_cdr_fields).copy()
+        all_field_names = [alpha_tcrdist_column_renamer[x] for x in alpha_tcrdist_column_renamer.keys() if '_'.join(x.split('_')[1:]) in clonotype_definition]
+        ntcr_df = ntcr_df.rename(columns=alpha_tcrdist_column_renamer).copy()
     else: 
         raise ValueError(f"{chain} is not a valid mode for processing alpha-beta TCRs. Choose from {valid_chain_opts}")
+    print(all_field_names)
     # populate our network with nodes as clonotypes, and edges as similarity-distance between them
     for n1_idx, n1_neighbors in enumerate(nearest_neighbors):
         for n2_idx in n1_neighbors:
