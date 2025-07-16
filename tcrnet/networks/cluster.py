@@ -1,5 +1,5 @@
 import pandas as pd
-import community as community_louvain
+import community.community_louvain as community_louvain
 from tcrdist.html_colors import get_html_colors
 from .graph import create_undirected_graph
 
